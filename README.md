@@ -13,7 +13,7 @@ git clone https://github.com/EsperLiu/vPython.git
 
 cd ./vPython
 
-./configurate
+./configure
 
 make
 
