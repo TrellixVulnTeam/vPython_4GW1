@@ -92,6 +92,8 @@ static void format_awaitable_error(PyThreadState *, PyTypeObject *, int, int);
 
 //static long getMicrotime();
 static void write_to_file(char* filename, char* funcname, int opcode,int lineno);
+static void write_counters(unsigned int pop_cnt, unsigned int push_cnt, unsigned int extpop_cnt, unsigned int stackgrow_cnt, unsigned int stackshrink_cnt);
+
 // static void write_stack(PyThreadState *, PyObject *, const char *);
 
 #define NAME_ERROR_MSG \
@@ -947,6 +949,12 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, PyFrameObject *f, int throwflag)
     char *funcname;
     int lineno;
     int top_value;
+    
+    static unsigned int pop_cnt = 0;
+    static unsigned int push_cnt = 0;
+    static unsigned int extpop_cnt = 0;
+    static unsigned int stackgrow_cnt = 0;
+    static unsigned int stackshrink_cnt = 0;
 
 
     /* when tracing we set things up so that
@@ -1177,11 +1185,30 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, PyFrameObject *f, int throwflag)
                                 prtrace(tstate, (STACK_POINTER)[-1], "ext_pop")), \
                                 *--(STACK_POINTER))
 #else
-#define PUSH(v)                BASIC_PUSH(v)
-#define POP()                  BASIC_POP()
-#define STACK_GROW(n)          BASIC_STACKADJ(n)
-#define STACK_SHRINK(n)        BASIC_STACKADJ(-n)
-#define EXT_POP(STACK_POINTER) (*--(STACK_POINTER))
+//#define PUSH(v)                BASIC_PUSH(v)
+#define PUSH(v)                { (void)(BASIC_PUSH(v), \
+                                 push_cnt = push_cnt + 1);\
+                                 assert(STACK_LEVEL() <= co->co_stacksize); }    
+//#define POP()                  BASIC_POP()
+#define POP()                 (pop_cnt = pop_cnt + 1, \
+                                BASIC_POP())                                
+//#define STACK_GROW(n)          BASIC_STACKADJ(n)
+#define STACK_GROW(n)   do { \
+                          assert(n >= 0); \
+                          (void)(BASIC_STACKADJ(n), \
+                          stackgrow_cnt = stackgrow_cnt + 1); \
+                          assert(STACK_LEVEL() <= co->co_stacksize); \
+                        } while (0)
+
+//#define STACK_SHRINK(n)        BASIC_STACKADJ(-n)
+#define STACK_SHRINK(n) do { \
+                            assert(n >= 0); \
+                            stackshrink_cnt = stackshrink_cnt + 1; \
+                            (void)(BASIC_STACKADJ(-n)); \
+                            assert(STACK_LEVEL() <= co->co_stacksize); \
+                        } while (0)                        
+//#define EXT_POP(STACK_POINTER) (*--(STACK_POINTER))
+#define EXT_POP(STACK_POINTER)	(*--(STACK_POINTER))                  
 #endif
 
 /* Local variable macros */
@@ -3845,6 +3872,10 @@ exception_unwind:
     }
 
 exiting:
+
+    /* write vpython counters */
+    write_counters(pop_cnt, push_cnt, extpop_cnt, stackgrow_cnt, stackshrink_cnt);
+
     if (tstate->use_tracing) {
         if (tstate->c_tracefunc) {
             if (call_trace_protected(tstate->c_tracefunc, tstate->c_traceobj,
@@ -5730,7 +5761,14 @@ void Py_LeaveRecursiveCall(void)
 //     return currentTime.tv_sec * (int)1e6 + currentTime.tv_usec;
 // }
 
-
+static void write_counters(unsigned int pop_cnt, unsigned int push_cnt, unsigned int extpop_cnt, unsigned int stackgrow_cnt, unsigned int stackshrink_cnt){
+    FILE * vpython = fopen("vpython.txt", "a+");
+    fprintf(vpython, ">>> pop %u |" , pop_cnt);
+    fprintf(vpython, " push %u |", push_cnt);
+    fprintf(vpython, " s.grow %u |", stackgrow_cnt);
+    fprintf(vpython, " s.shrink %u\n", stackshrink_cnt);
+    fclose(vpython);
+}
 
 static void write_to_file(char* filename, char* funcname, int opcode, int lineno)
 {
